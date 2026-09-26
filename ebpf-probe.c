@@ -13,7 +13,6 @@
 
 BPF_PERF_OUTPUT(events);
 
-// We only need to send the length. The kernel will automatically attach the raw packet behind it.
 struct packet_meta {
     u32 len;
 };
@@ -58,12 +57,31 @@ int xdp_prog(struct xdp_md *ctx) {
     struct dns_hdr *dns = (void *)(udp + 1);
     if ((void *)(dns + 1) > data_end) return XDP_PASS;
 
+    // 1. Unpack all 6 DNS header fields to host byte order
+    u16 id      = bpf_ntohs(dns->id);
+    u16 flags   = bpf_ntohs(dns->flags);
     u16 qdcount = bpf_ntohs(dns->qdcount);
+    u16 ancount = bpf_ntohs(dns->ancount);
+    u16 nscount = bpf_ntohs(dns->nscount);
+    u16 arcount = bpf_ntohs(dns->arcount);
 
-    if (qdcount > 1) {
+    // 2. Extract standard DNS subflags from the flags field
+    u16 qr     = (flags >> 15) & 0x01;
+    u16 opcode = (flags >> 11) & 0x0F;
+    u16 aa     = (flags >> 10) & 0x01;
+    u16 tc     = (flags >> 9)  & 0x01;
+    u16 rd     = (flags >> 8)  & 0x01;
+    u16 ra     = (flags >> 7)  & 0x01;
+    u16 rcode  = flags & 0x0F;
+
+    // 3. User-defined rules evaluated here (First-match wins)
+    /* %RULES_CODE% */
+
+    // Default Action: ALLOW
+    return XDP_PASS;
+
+limit_packet: {
         u32 pkt_len = data_end - data;
-        
-        // Cap the captured payload at 256 bytes to prevent huge memory spikes
         if (pkt_len > 256) {
             pkt_len = 256;
         }
@@ -71,11 +89,7 @@ int xdp_prog(struct xdp_md *ctx) {
         struct packet_meta meta = {};
         meta.len = pkt_len;
 
-        // Native BCC helper: Safely dumps the metadata struct AND the raw packet into user space
         events.perf_submit_skb(ctx, pkt_len, &meta, sizeof(meta));
-        
         return XDP_DROP;
     }
-
-    return XDP_PASS;
 }
